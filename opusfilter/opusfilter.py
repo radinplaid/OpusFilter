@@ -81,6 +81,16 @@ class OpusFilter:
                 'created.'.format(self.output_dir))
             os.mkdir(self.output_dir)
 
+        temp_dir_path = configuration.get('common', {}).get('temp_directory')
+        if temp_dir_path:
+            if not os.path.isdir(temp_dir_path):
+                logger.warning(
+                    'Temp directory "{}" does not exists. It will be '
+                    'created.'.format(temp_dir_path))
+                os.mkdir(self.output_dir)
+            lm.tempfile.tempdir = temp_dir_path
+            word_alignment.tempfile.tempdir = temp_dir_path
+
         self.step_functions = {
             'opus_read': self.read_from_opus,
             'filter': self.filter_data,

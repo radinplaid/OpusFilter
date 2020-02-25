@@ -197,6 +197,21 @@ class TestOpusFilter(unittest.TestCase):
         self.assertTrue(os.path.isfile('test_creating_dir/RF1_sents.sv'))
         shutil.rmtree('test_creating_dir')
 
+    @mock.patch('opustools.opus_get.input', create=True)
+    def test_setting_tempdir(self, mocked_input):
+        mocked_input.side_effect = ['y']
+        output_path = tempfile.mkdtemp()
+        tempdir_path = os.path.join('/tmp', 'testpath')
+        os.mkdir(tempdir_path)
+        test_config = self.configuration.copy()
+        common = {'output_directory': output_path,
+                'temp_directory': tempdir_path}
+        test_config['common'] = common
+        test_filter = OpusFilter(test_config)
+        test_filter.execute_steps()
+        shutil.rmtree(output_path)
+        shutil.rmtree(tempdir_path)
+
 
 class TestSort(unittest.TestCase):
 
