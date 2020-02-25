@@ -87,7 +87,7 @@ class OpusFilter:
                 logger.warning(
                     'Temp directory "{}" does not exists. It will be '
                     'created.'.format(temp_dir_path))
-                os.mkdir(self.output_dir)
+                os.mkdir(temp_dir_path)
             lm.tempfile.tempdir = temp_dir_path
             word_alignment.tempfile.tempdir = temp_dir_path
 
