@@ -201,6 +201,7 @@ class TestOpusFilter(unittest.TestCase):
     def test_setting_tempdir(self, mocked_input):
         mocked_input.side_effect = ['y']
         output_path = tempfile.mkdtemp()
+        original_tempir_path = tempfile.gettempdir()
         tempdir_path = os.path.join('/tmp', 'testpath')
         os.mkdir(tempdir_path)
         test_config = self.configuration.copy()
@@ -209,6 +210,7 @@ class TestOpusFilter(unittest.TestCase):
         test_config['common'] = common
         test_filter = OpusFilter(test_config)
         test_filter.execute_steps()
+        tempfile.tempdir = original_tempir_path
         shutil.rmtree(output_path)
         shutil.rmtree(tempdir_path)
 
