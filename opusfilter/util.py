@@ -2,8 +2,11 @@
 
 import bz2
 import gzip
+import io
 import lzma
 import os
+
+import ruamel.yaml
 
 
 def file_open(filename, mode='r', encoding='utf8'):
@@ -29,3 +32,14 @@ def file_open(filename, mode='r', encoding='utf8'):
             mode += 't'
         return gzip.open(filename, mode=mode, encoding=encoding)
     return open(filename, mode=mode, encoding=encoding)
+
+
+yaml = ruamel.yaml.YAML()
+
+
+def yaml_dumps(obj):
+    """Return a string containing YAML output from input object"""
+    with io.StringIO() as iostream:
+        yaml.dump(obj, iostream)
+        iostream.seek(0)
+        return iostream.read()
