@@ -23,7 +23,8 @@ from . import word_alignment
 from . import tokenization
 from . import classifier
 from . import segment_hash
-from .util import file_open
+from .util import file_open, file_download, Var, VarStr
+
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ def dict_get(key, dictionary):
         value = dictionary[int(first)]
     else:
         value = dictionary[first]
-    return value if not len(parts) else dict_get('.'.join(parts), value)
+    return value if not parts else dict_get('.'.join(parts), value)
 
 
 def dict_set(key, value, dictionary):
@@ -74,16 +75,12 @@ class OpusFilter:
         self.configuration = configuration
         self.output_dir = configuration.get('common', {}).get('output_directory')
         if not self.output_dir:
-            logger.warning(
-                'Output directory not specified. Writing files to current '
-                'directory.')
+            logger.warning('Output directory not specified. Writing files to current directory.')
             self.output_dir = '.'
         elif not os.path.isdir(self.output_dir):
-            logger.warning(
-                'Directory "{}" does not exist. It will be '
-                'created.'.format(self.output_dir))
+            logger.warning('Directory "%s" does not exist. It will be created.', self.output_dir)
             os.mkdir(self.output_dir)
-
+        self.constants = configuration.get('common', {}).get('constants', {})
         self.step_functions = {
             'opus_read': self.read_from_opus,
             'filter': self.filter_data,
@@ -102,7 +99,9 @@ class OpusFilter:
             'remove_duplicates': self.remove_duplicates,
             'split': self.split,
             'unzip': self.unzip,
-            'preprocess': self.preprocess
+            'preprocess': self.preprocess,
+            'download': self.download_file,
+            'write': self.write_to_file
         }
 
     def execute_steps(self, overwrite=False, last=None):
@@ -111,8 +110,7 @@ class OpusFilter:
             if last is not None and num + 1 > last:
                 logger.info('Stopping after step %s', last)
                 break
-            logger.info('Running step %s: %s', num + 1, step)
-            self.step_functions[step['type']](step['parameters'], overwrite=overwrite)
+            self._run_step(step, num + 1, overwrite)
 
     def execute_step(self, num, overwrite=False):
         """Execute single step in the configuration (first = 1, last = -1)
@@ -122,11 +120,71 @@ class OpusFilter:
 
         """
         step = self.configuration['steps'][num if num < 0 else num - 1]
-        logger.info('Running step %s: %s', num, step)
-        self.step_functions[step['type']](step['parameters'], overwrite=overwrite)
+        self._run_step(step, num, overwrite)
+
+    @staticmethod
+    def _check_variables(variables):
+        """Check that variable definitions are valid"""
+        lengths = set()
+        for key, value in variables.items():
+            if not isinstance(value, list):
+                raise ConfigurationError("Variable {} does not define a list".format(key))
+            lengths.add(len(value))
+            if len(lengths) > 1:
+                raise ConfigurationError(
+                    "Variable {} has a different length of values than the previous".format(key))
+        return list(lengths)[0] if lengths else 0
+
+    def _expand_parameters(self, obj, namespace):
+        """Expand Var and VarStr objects in obj"""
+        if isinstance(obj, list):
+            return [self._expand_parameters(x, namespace) for x in obj]
+        if isinstance(obj, dict):
+            return {key: self._expand_parameters(value, namespace) for key, value in obj.items()}
+        if isinstance(obj, VarStr):
+            try:
+                formatted = obj.value.format(**namespace)
+            except (KeyError, IndexError) as err:
+                raise ConfigurationError(
+                    "String substitutions not defined in the context: {}".format(obj.value)) from err
+            return formatted
+        if isinstance(obj, Var):
+            if obj.value not in namespace:
+                raise ConfigurationError("Variable not defined in the context: {}".format(obj.value))
+            return namespace[obj.value]
+        return obj
+
+    def _run_step(self, step, num, overwrite):
+        """Run given step"""
+        logger.info('Running step %s: %s', num, step['type'])
+        variables = step.get('variables', {})
+        namespace = copy.copy(self.constants)
+        logger.info("%s", namespace)
+        namespace.update(step.get('constants', {}))
+        if variables:
+            num_choices = self._check_variables(variables)
+            if not num_choices:
+                logger.warning("Variable value lists are empty, skipping step")
+            for idx in range(num_choices):
+                for key, values in variables.items():
+                    namespace[key] = values[idx]
+                parameters = self._expand_parameters(step['parameters'], namespace)
+                logger.info("- substep %s: %s", idx + 1, dict(namespace))
+                logger.debug("  parameters: %s", parameters)
+                self.step_functions[step['type']](parameters, overwrite=overwrite)
+        else:
+            parameters = self._expand_parameters(step['parameters'], namespace)
+            logger.debug("  parameters: %s", parameters)
+            self.step_functions[step['type']](parameters, overwrite=overwrite)
 
     def read_from_opus(self, parameters, overwrite=False):
-        """Download and read a corpus from OPUS"""
+        """Download and read a corpus from OPUS using OpusTools
+
+        For details, see:
+        * OPUS corpus collection :cite:`tiedemann-2016-parallel`.
+        * OpusTools :cite:`aulamo-etal-2020-opustools`.
+
+        """
         src_out = os.path.join(self.output_dir, parameters['src_output'])
         tgt_out = os.path.join(self.output_dir, parameters['tgt_output'])
         if not overwrite and os.path.isfile(src_out) and os.path.isfile(tgt_out):
@@ -171,28 +229,31 @@ class OpusFilter:
         """Fix file paths in filter parameters"""
         # Make a copy so that the original paths are not modified
         fixed_params = copy.deepcopy(filter_params)
-        for f in fixed_params:
-            filter_name = next(iter(f.items()))[0]
-            if filter_name == 'WordAlignFilter' and 'priors' in f[filter_name]:
-                f[filter_name]['priors'] = os.path.join(
-                    self.output_dir, f[filter_name]['priors'])
+        for fdict in fixed_params:
+            filter_name = next(iter(fdict.items()))[0]
+            if filter_name == 'WordAlignFilter' and 'priors' in fdict[filter_name]:
+                fdict[filter_name]['priors'] = os.path.join(
+                    self.output_dir, fdict[filter_name]['priors'])
             elif filter_name in 'CrossEntropyFilter':
-                for idx, lm_params in enumerate(f[filter_name]['lm_params']):
-                    f[filter_name]['lm_params'][idx]['filename'] = os.path.join(
+                for idx, lm_params in enumerate(fdict[filter_name]['lm_params']):
+                    fdict[filter_name]['lm_params'][idx]['filename'] = os.path.join(
                         self.output_dir, lm_params['filename'])
                     if lm_params.get('interpolate'):
                         for idx2 in range(len(lm_params['interpolate'])):
-                            f[filter_name]['lm_params'][idx]['interpolate'][idx2][0] = os.path.join(
+                            fdict[filter_name]['lm_params'][idx]['interpolate'][idx2][0] = os.path.join(
                                 self.output_dir, lm_params['interpolate'][idx2][0])
             elif filter_name in 'CrossEntropyDifferenceFilter':
                 for key in ['id_lm_params', 'nd_lm_params']:
-                    for idx, lm_params in enumerate(f[filter_name][key]):
-                        f[filter_name][key][idx]['filename'] = os.path.join(
+                    for idx, lm_params in enumerate(fdict[filter_name][key]):
+                        fdict[filter_name][key][idx]['filename'] = os.path.join(
                             self.output_dir, lm_params['filename'])
                         if lm_params.get('interpolate'):
                             for idx2 in range(len(lm_params['interpolate'])):
-                                f[filter_name][key][idx]['interpolate'][idx2][0] = os.path.join(
+                                fdict[filter_name][key][idx]['interpolate'][idx2][0] = os.path.join(
                                     self.output_dir, lm_params['interpolate'][idx2][0])
+            elif filter_name == 'LanguageIDFilter' and fdict[filter_name].get('fasttext_model_path'):
+                fdict[filter_name]['fasttext_model_path'] = os.path.join(
+                    self.output_dir, fdict[filter_name]['fasttext_model_path'])
         return fixed_params
 
     def filter_data(self, parameters, overwrite=False):
@@ -287,7 +348,7 @@ class OpusFilter:
                     outf.write(line)
             for infname, outfname in zip(infiles[1:], outfiles[1:]):
                 with file_open(infname) as inf:
-                    lines = [line for line in self._yield_subset(inf, sample)]
+                    lines = list(self._yield_subset(inf, sample))
                 random.shuffle(lines)
                 with file_open(outfname, 'w') as outf:
                     for line in lines:
@@ -377,23 +438,19 @@ class OpusFilter:
         model, value, features = trainer.find_best_model(
             parameters['criterion'], **parameters.get('optimization', {}))
 
-        logger.info('Best model has {criterion}: {value}'.format(
-            criterion=parameters['criterion'], value=value))
+        logger.info('Best model has %s: %s', parameters['criterion'], value)
 
         feature_cutoffs = ''
         for item in features.items():
             feature_cutoffs += '\n\t'+str(item)
-        logger.info('And feature cutoffs: {}'.format(feature_cutoffs))
+        logger.info('And feature cutoffs: %s', feature_cutoffs)
 
         feature_weights = ''
         for item in model.weights():
             feature_weights += '\n\t'+str(item)
-        logger.info('And weights: {}'.format(feature_weights))
+        logger.info('And weights: %s', feature_weights)
 
-        logger.info('Saving best model to {}'.format(model_out))
-
-        # with file_open(model_out, 'wb') as model_file:
-        # TODO: ValueError: binary mode doesn't take an encoding argument
+        logger.info('Saving best model to %s', model_out)
         with open(model_out, 'wb') as model_file:
             pickle.dump(model, model_file)
 
@@ -411,8 +468,6 @@ class OpusFilter:
             logger.info("Output files exists, skipping step")
             return
         model_in = os.path.join(self.output_dir, parameters['model'])
-        # with file_open(model_in, 'rb') as model_file:
-        # TODO: ValueError: binary mode doesn't take an encoding argument
         with open(model_in, 'rb') as model_file:
             model = pickle.load(model_file)
         scores_in = os.path.join(self.output_dir, parameters['scores'])
@@ -474,8 +529,7 @@ class OpusFilter:
         combine = parameters.get('combine_operator')
         with file_open(valuefile, 'r') as fobj:
             logger.info("Reading values from %s", valuefile)
-            values = [x for x in tqdm(
-                self._read_values(fobj, key=key, conv=typeconv, combine=combine))]
+            values = list(tqdm(self._read_values(fobj, key=key, conv=typeconv, combine=combine)))
             order = list(np.argsort(values))
             if reverse:
                 order.reverse()
@@ -545,11 +599,11 @@ class OpusFilter:
         if not overwrite and all(os.path.isfile(outfile) for outfile in outfiles):
             logger.info("Output files exists, skipping step")
             return
-        n = parameters['n']
+        num = parameters['n']
         for infile, outfile in zip(infiles, outfiles):
             logger.info("Processing file %s", infile)
             with file_open(infile, 'r') as inf, file_open(outfile, 'w') as outf:
-                for line in tqdm(itertools.islice(inf, n)):
+                for line in tqdm(itertools.islice(inf, num)):
                     outf.write(line)
 
     def tail(self, parameters, overwrite=False):
@@ -561,14 +615,14 @@ class OpusFilter:
         if not overwrite and all(os.path.isfile(outfile) for outfile in outfiles):
             logger.info("Output files exists, skipping step")
             return
-        n = parameters['n']
+        num = parameters['n']
         for infile, outfile in zip(infiles, outfiles):
             logger.info("Processing file %s", infile)
             with file_open(infile, 'r') as inf, file_open(outfile, 'w') as outf:
                 tmp = []
                 for line in tqdm(inf):
                     tmp.append(line)
-                    if len(tmp) > n:
+                    if len(tmp) > num:
                         tmp.pop(0)
                 for line in tmp:
                     outf.write(line)
@@ -637,7 +691,7 @@ class OpusFilter:
         threshold = parameters.get('threshold', 1)
         hasher = segment_hash.SegmentHasher(
             compare=parameters.get('compare', 'all'),
-            hash=parameters.get('hash', 'xx_64'),
+            method=parameters.get('hash', 'xx_64'),
             hashseed=parameters.get('seed', 0)
         )
         infs = [file_open(infile) for infile in infiles]
@@ -676,7 +730,7 @@ class OpusFilter:
             return
         hasher = segment_hash.SegmentHasher(
             compare=parameters.get('compare', 'all'),
-            hash=parameters.get('hash', 'xx_64'),
+            method=parameters.get('hash', 'xx_64'),
             letters_only=parameters.get('letters_only', False),
             lowercase=parameters.get('lowercase', False),
         )
@@ -691,9 +745,7 @@ class OpusFilter:
                 key = hasher.apply(lines)
                 overlap_total += 1
                 overlap_counter[key] += 1
-            logger.info(
-                "Collected {} types from {} tokens".format(
-                    len(overlap_counter), overlap_total))
+            logger.info("Collected %s types from %s tokens", len(overlap_counter), overlap_total)
         counter = collections.Counter()
         removed_entries = 0
         total = 0
@@ -756,3 +808,21 @@ class OpusFilter:
                 fobj.flush()
         for fobj in outfileobjs:
             fobj.close()
+
+    def download_file(self, parameters, overwrite=False):
+        """Download file"""
+        outfile = os.path.join(self.output_dir, parameters['output'])
+        if not overwrite and os.path.isfile(outfile):
+            logger.info("Output file exists, skipping step")
+            return
+        file_download(parameters['url'], outfile)
+
+    def write_to_file(self, parameters, overwrite=False):
+        """Write specified data to file"""
+        outfile = os.path.join(self.output_dir, parameters['output'])
+        if not overwrite and os.path.isfile(outfile):
+            logger.info("Output file exists, skipping step")
+            return
+        data = parameters.get('data', '')
+        with file_open(outfile, 'w') as outf:
+            outf.write(data)

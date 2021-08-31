@@ -5,15 +5,17 @@ import string
 import math
 import difflib
 import itertools
+from typing import Iterator, List, Tuple
 
 import regex
 from langid.langid import LanguageIdentifier, model
 import pycld2
 from bs4 import BeautifulSoup as bs
+import fasttext
 
 from . import FilterABC, ConfigurationError
-from .lm import CrossEntropyFilter, CrossEntropyDifferenceFilter  # noqa: F401
-from .word_alignment import WordAlignFilter  # noqa: F401
+from .lm import CrossEntropyFilter, CrossEntropyDifferenceFilter  # pylint: disable=W0611 # noqa: F401
+from .word_alignment import WordAlignFilter  # pylint: disable=W0611 # noqa: F401
 
 
 logger = logging.getLogger(__name__)
@@ -109,7 +111,8 @@ class AverageWordLengthFilter(FilterABC):
         self.pass_empty = pass_empty
         super().__init__(**kwargs)
 
-    def _average_word_len(self, sentence):
+    @staticmethod
+    def _average_word_len(sentence):
         parts = sentence.split()
         if parts:
             return len(''.join(parts)) / len(parts)
@@ -180,18 +183,34 @@ class CharacterScoreFilter(FilterABC):
 
 
 class LanguageIDFilter(FilterABC):
-    """Language identification confidence filter"""
+    """Language identification confidence filter
 
-    def __init__(self, languages=None, id_method='langid', thresholds=None, **kwargs):
+    Currently this supports three methods:
+    * langid (default): see :cite:`lui-baldwin-2012-langid`
+    * cld2: see https://github.com/CLD2Owners/cld2
+    * fasttext: see :cite:`joulin-etal-2016-fasttext` and :cite:`joulin-etal-2017-bag`
+
+    """
+
+    def __init__(self, languages=None, id_method='langid', thresholds=None,
+                 fasttext_model_path=None, **kwargs):
         if languages is None:
             raise ConfigurationError("A list of language codes needs to be defined")
+        if id_method == 'fasttext' and not fasttext_model_path:
+            raise ConfigurationError("FastText language ID method was choosen without specifying "
+                                     "any path to fasttext model")
+        if id_method != 'fasttext' and fasttext_model_path:
+            raise ConfigurationError("FastText language ID method was not choosen but fasttext "
+                                     "path to model was set")
+        self.fasttext_model = fasttext.load_model(fasttext_model_path) \
+            if id_method == 'fasttext' else None
         self.languages = languages
         self.id_method = id_method
         self.thresholds = [0] * len(self.languages) if thresholds is None else thresholds
         self.identifier = LanguageIdentifier.from_modelstring(model, norm_probs=True)
         super().__init__(**kwargs)
 
-    def confidence(self, sentence, lan):
+    def confidence(self, sentence: str, lan: str) -> float:
         """Return confidence of the identifier"""
         if not sentence:
             # Prevent filtering empty lines
@@ -209,7 +228,7 @@ class LanguageIDFilter(FilterABC):
                 cldconf = 0.0
             return cldconf
 
-        elif self.id_method == 'langid':
+        if self.id_method == 'langid':
             try:
                 lidetails = self.identifier.classify(sentence)
             except Exception:
@@ -219,17 +238,36 @@ class LanguageIDFilter(FilterABC):
                 liconf = 0.0
             return liconf
 
-    def score(self, pairs):
+        if self.id_method == 'fasttext':
+            lang, confidence = self._fasttext_predict_lang(sentence)
+            if lang != lan:
+                liconf = 0.0
+            else:
+                liconf = confidence
+            return liconf
+
+        raise ValueError("Unknown language identification method '%s'" % self.id_method)
+
+    def score(self, pairs: List[Tuple[str, str]]) -> Iterator[List[float]]:
         for pair in pairs:
             yield [self.confidence(sent, self.languages[idx]) for idx, sent in enumerate(pair)]
 
-    def accept(self, score):
+    def accept(self, score: Tuple[float, float]) -> bool:
         return all(conf > threshold for conf, threshold in zip(score, self.thresholds))
+
+    def _fasttext_predict_lang(self, texts: List[str]) -> Tuple[str, float]:
+        output = self.fasttext_model.predict(texts, k=1)
+        confidence = output[1][0]
+        label = output[0][0][9:]
+        return label, confidence
 
 
 class TerminalPunctuationFilter(FilterABC):
-    """Penalty score with respect to the co-occurrence of terminal
-        punctuation marks"""
+    """Penalty score with respect to the co-occurrence of terminal punctuation marks
+
+    See :cite:`vazquez-etal-2019-university`
+
+    """
 
     def __init__(self, threshold=-2, **kwargs):
         self.threshold = threshold
@@ -261,6 +299,8 @@ class NonZeroNumeralsFilter(FilterABC):
     to be equal or above the threshold; otherwise at least one the
     scores have to be equal or above the threshold. For bilingual
     input, it has no effect.
+
+    See :cite:`vazquez-etal-2019-university`
 
     """
 

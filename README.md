@@ -1,13 +1,14 @@
 # OpusFilter
 
 OpusFilter is a tool for filtering and combining parallel corpora. It
-uses the OpusTool library to download data from the OPUS corpus
-collection, but can be used with any corpora in raw text format.
+uses the OpusTools library (Aulamo et al., 2020) to download data from
+the OPUS corpus collection (Tiedemann, 2012), but can be used with any
+corpora in raw text format.
 
 Features:
 
 * Preprocessing pipelines configured with [YAML](https://yaml.org/)
-* Simple downloading of parallel corpora from [OPUS](http://opus.nlpl.eu/)
+* Simple downloading of parallel corpora from [OPUS](http://opus.nlpl.eu/) with [OpusTools](https://github.com/Helsinki-NLP/OpusTools)
 * Implementations for many common text file operations on parallel files
 * Memory-efficient processing of large files
 * Implemented filters based e.g. on language identification, word
@@ -16,19 +17,23 @@ Features:
 
 OpusFilter has been presented in [ACL 2020 system demonstrations](https://www.aclweb.org/anthology/2020.acl-demos.20).
 
+A changelog is available in [docs/CHANGELOG.md](docs/CHANGELOG.md).
+
 ## Table of contents
 
 * [Installing](#installing)
    * [Required libraries](#required-libraries)
    * [Optional libraries and tools](#optional-libraries-and-tools)
-* [Citing](#citing)
+* [Citing and references](#citing-and-references)
 * [Overview](#overview)
    * [Examples](#examples)
+   * [Variables and constants](#variables-and-constants)
    * [Running a single command](#running-a-single-command)
 * [Available functions](#available-functions)
    * [Downloading and selecting data](#downloading-and-selecting-data)
       * [opus_read](#opus_read)
       * [concatenate](#concatenate)
+      * [download](#download)
       * [head](#head)
       * [tail](#tail)
       * [slice](#slice)
@@ -36,6 +41,7 @@ OpusFilter has been presented in [ACL 2020 system demonstrations](https://www.ac
       * [subset](#subset)
       * [product](#product)
       * [unzip](#unzip)
+      * [write](#write)
    * [Preprocessing text](#preprocessing-text)
       * [preprocess](#preprocess)
    * [Filtering and scoring](#filtering-and-scoring)
@@ -82,6 +88,7 @@ OpusFilter has been presented in [ACL 2020 system demonstrations](https://www.ac
    * [opusfilter-duplicates](#opusfilter-duplicates)
    * [opusfilter-scores](#opusfilter-scores)
    * [opusfilter-test](#opusfilter-test)
+* [How to contribute](#how-to-contribute)
 
 ## Installing
 
@@ -98,11 +105,12 @@ Install from source:
 * graphviz
 * langid
 * fast-mosestokenizer
+* fasttext
 * OpusTools
 * pandas
 * pycld2
 * pyhash
-* PyYAML
+* ruamel.yaml
 * regex
 * scikit-learn
 * tqdm
@@ -119,7 +127,7 @@ For using word alignment filters, you need to install elfomal
 variable `EFLOMAL_PATH` to eflomal's root directory, which contains
 the Python scripts `align.py` and `makepriors.py`.
 
-## Citing
+## Citing and references
 
 If you use OpusFilter in your research, please cite our [ACL 2020 paper](https://www.aclweb.org/anthology/2020.acl-demos.20):
 
@@ -136,6 +144,9 @@ If you use OpusFilter in your research, please cite our [ACL 2020 paper](https:/
     pages = "150--156"
 }
 ```
+
+A bibliography of other papers cited in the documentation and code can
+be found from [docs/references.bib](docs/references.bib).
 
 ## Overview
 
@@ -292,6 +303,79 @@ WMT-News data, you can have:
       filters: *myfilters
 ```
 
+### Variables and constants
+
+If you have for example multiple bitexts, for which you want to use
+the same preprocessing steps, writing separate steps for each of them
+requires a lot of manually written configuration. While generating the
+YAML configuration programmatically is a recommended option especially
+for very complex setups, OpusFilter provides a couple of custom YAML
+tags for defining objects that can be replaced with constant or
+variable values.
+
+The first tag, `!var`, is used for mapping the variable name (string)
+to its value. For example, if the variable or constant `x` is one in
+the current scope, `{key: !var x}` will be replaced by `{key: 1}`.
+The value can be any kind of object.
+
+The second tag, `!varstr`, can be used for one or more variable
+substitutions within a single string, as in Python's `format()`
+method. For example, if `l1` and `l2` have the values `en` and `fi`,
+respectively, in the current scope,
+`{output: !varstr "cleaned.{l1}-{l2}.txt"}` will be replaced by
+`{output: cleaned.en-fi.txt}`.
+Note that the string template has to be quoted in order that the YAML
+loader will not consider the expressions inside the braces as objects.
+
+Constant values for the variables can be defined in the `common`
+section of the configuration, having a scope in all steps, or in
+individual steps, having a local scope within the step. In either
+case, the definitions are placed in a dictionary under the `constants`
+key, with variable names as keys. For example,
+```
+common:
+  constants:
+    source: en
+
+steps:
+  - type: concatenate
+    parameters:
+      inputs:
+      - !varstr "file1.{source}-{target}.gz"
+      - !varstr "file2.{source}-{target}.gz"
+      output: !varstr "all.{source}-{target}.gz"
+    constants:
+      target: fi
+```
+will produce the output file `"all.en-fi.gz"`. The local scope of the
+step overrides definitions in `common`.
+
+Another possibility is to define multiple choices for the variable(s)
+within a single step. The definitions are placed in a dictionary under
+the `variables` key, with variable names as keys and a list of
+intended variable values as values. For example,
+```
+common:
+  constants:
+    source: en
+
+steps:
+  - type: concatenate
+    parameters:
+      inputs:
+      - !varstr "file1.{source}-{target}.gz"
+      - !varstr "file2.{source}-{target}.gz"
+      output: !varstr "all.{source}-{target}.gz"
+    variables:
+      target: [fi, sv]
+```
+will produce output files `"all.en-fi.gz"` and `"all.en-sv.gz"`. If
+values are defined for multiple variables, the list are required to
+have the same length. The step is expanded into as many substeps as
+there are values in the lists. Note that if you need to use the
+same lists of variable values in multiple steps, you can exploit
+the standard YAML node anchors and references.
+
 ### Running a single command
 
 If you need to run a single OpusFilter function wihtout the need of
@@ -346,7 +430,8 @@ checking and storing.
 
 #### `opus_read`
 
-Read a corpus from OPUS collection.
+Read a corpus from the OPUS corpus collection (Tiedemann, 2012) using
+the OpusTools (Aulamo et al., 2020) interface.
 
 Parameters:
 
@@ -366,6 +451,15 @@ Concatenate two or more text files.
 Parameters:
 
 * `inputs`: a list of input files
+* `output`: output file
+
+#### `download`
+
+Download a file from URL.
+
+Parameters:
+
+* `url`: URL for the file to download
 * `output`: output file
 
 #### `head`
@@ -494,6 +588,17 @@ Parameters:
 * `separator`: a string separator in the input file
 
 Can be used to split e.g. Moses-style (` ||| `) or tab-separated parallel text files into parts.
+
+#### `write`
+
+Write a specified string into a file.
+
+Parameters:
+
+* `output`: output file
+* `data`: input data to write to the output (converted to a string if not already)
+
+Useful mostly for testing.
 
 ### Preprocessing text
 
@@ -694,7 +799,8 @@ for forcing numerical values to be compared as strings.
 
 #### `train_ngram`
 
-Train a character-based varigram language model with VariKN. Can be used for `CrossEntropyFilter`.
+Train a character-based varigram language model with VariKN (Siivola et al. 2007).
+Can be used for `CrossEntropyFilter` and `CrossEntropyDifferenceFilter`.
 
 Parameters:
 
@@ -730,7 +836,8 @@ details.
 
 #### `train_aligment`
 
-Train word alignment priors for eflomal. Can be used in `WordAlignFilter`.
+Train word alignment priors for eflomal (Östling and Tiedemann, 2016).
+Can be used in `WordAlignFilter`.
 
 Parameters:
 
@@ -856,10 +963,13 @@ Filter segments based on their language identification confidence scores.
 Parameters:
 
 * `languages`: expected languages for the segments
-* `id_method`: language indentification method (`langid` for using the `langid` library of `cld2` for using the `cld2` library; the default is `langid`)
+* `id_method`: language indentification method (`langid` for using the `langid` library, `cld2` for using the `cld2` library, or `fasttext` for using a `fasttext` model; the default is `langid`)
 * `thresholds`: minimum identification confidence score for the segments (a single float or a list of floats per language)
+* `fasttext_model_path`: path for a `fasttext` model (required only for the `fasttext` method; default `null`)
 
 Returned scores are the language identification confidence scores from a given identification method for the segments. The scores range from 0 to 1. In filtering, all values have to be greater than the minimum thresholds. Negative threshold can be used to skip filtering for a language.
+
+A pretrained `fasttext` model can be downloaded from https://fasttext.cc/docs/en/language-identification.html
 
 ### Special character and similarity filters
 
@@ -871,7 +981,7 @@ The returned scores are two boolean values indicating whether the segments conta
 
 #### `TerminalPunctuationFilter`
 
-Filter segments based on a penalty score with respect to the co-occurrence of therminal punctuation marks ('.', '...', '?', '!') in source and target segments. The score is formulated as follows: the initial score is the absolute difference in source and target terminal punctuation counts, the score is then incremented by the number of terminal punctuation beyond the first occurence in both segments, and finally, the score is updated with `score=-log(score+1)` ([Vázquez et al.](https://www.aclweb.org/anthology/W19-5441/)). The score of the greatest co-occurrence is 0 and smaller values indicate greater penalty.
+Filter segments based on a penalty score with respect to the co-occurrence of therminal punctuation marks ('.', '...', '?', '!') in source and target segments (Vázquez et al., 2019). The score is formulated as follows: the initial score is the absolute difference in source and target terminal punctuation counts, the score is then incremented by the number of terminal punctuation beyond the first occurence in both segments, and finally, the score is updated with `score=-log(score+1)`. The score of the greatest co-occurrence is 0 and smaller values indicate greater penalty.
 
 This filter works only for bilingual input.
 
@@ -883,7 +993,7 @@ The returned score is a single terminal punctuation score. In filtering, the sco
 
 #### `NonZeroNumeralsFilter`
 
-Filter segments based on a similarity measure of numerals between the segments with zeros removed. Non-zero numerals are extracted from all segments preserving the relative order of the numerals. The similarity score between the numeral sequences is produced with `SequenceMatcher.ratio()` from Python's `difflib` library.
+Filter segments based on a similarity measure of numerals between the segments with zeros removed (Vázquez et al., 2019). Non-zero numerals are extracted from all segments preserving the relative order of the numerals. The similarity score between the numeral sequences is produced with `SequenceMatcher.ratio()` from Python's `difflib` library.
 
 Parameters:
 
@@ -960,17 +1070,13 @@ match the parameters used in model training; do not change them unless
 you know what you are doing.
 
 The filter returns difference between the in-domain LM and non-domain
-LM cross-entropy. For details, see:
-
-> Robert C. Moore and William Lewis (2010). Intelligent Selection of
-> Language Model Training Data. In Proceedings of the ACL 2010
-> Conference Short Papers, pp. 220–224.
+LM cross-entropy.
 
 ### Alignment model filters
 
 #### `WordAlignFilter`
 
-Filter segments by word aligment scores.
+Filter segments by word aligment scores using eflomal (Östling and Tiedemann, 2016).
 
 Parameters:
 * `src_threshold`: score threshold for source language (default 0)
@@ -1238,3 +1344,32 @@ files, and then runs the filters on them one by one. The number and
 proportion of removed segments is printed. In addition, it is possible
 to write the removed segments to a file in JSON Lines format
 (`--removed`).
+
+## How to contribute
+
+Questions, bug reports, and feature wishes are welcome in the GitHub
+issues page. We are also happy to consider pull requests. There are a
+few rules for pull requests:
+
+* Make a pull request to the `develop` branch instead of `master`.
+* The code should support at least Python versions from 3.6 to 3.8.
+* Please follow [PEP 8](https://www.python.org/dev/peps/pep-0008/). Exception: The maximum line length is 127 characters instead of 79.
+* Especially for new features, please include test cases for unit testing.
+
+PEP 8 compatibility can be checked with `flake8`. Install it e.g. via
+`pip` and run `flake8 opusfilter/` in the project root.
+
+The unit tests are located in the `tests` directory. To run them,
+install [pytest](https://pytest.org/) and run `python -m pytest
+tests/` in the project root. Also nosetests should work, if you have
+VariKN and eflomal set up as instructed (pytest skips the respective
+tests if not).
+
+GitHub workflows defined in the project run automatically `flake8`
+checks and unit testing with `pytest` using Python 3.6, 3.7, and 3.8.
+
+Especially for larger contributions, consider using a code analysis
+tool like [Pylint](https://github.com/PyCQA/pylint). Install it
+e.g. via `pip`, run `pylint opusfilter/` in the project root and fix
+at least everything that is simple to fix in the new code (note that
+the current code yields a few warnings from `pylint`).
