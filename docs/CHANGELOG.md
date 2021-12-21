@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Support for Chinese word segmentation using `jieba` as a tokenizer (https://github.com/Helsinki-NLP/OpusFilter/pull/27)
+
+## [2.1.2] - 2021-11-11
+
+### Fixed
+
+- fix wrong keyword argument name in opusfilter-duplicates
+
+## [2.1.1] - 2021-10-19
+
+### Changed
+
+- move "How to contribute" to docs/CONTRIBUTING.md
+
+### Fixed
+
+- fix setuptools requirement (https://github.com/Helsinki-NLP/OpusFilter/issues/21)
+- fix version requirement for pandas (>=1.0.0)
+
 ## [2.1.0] - 2021-08-31
 
 ### Changed
@@ -59,7 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First tagged version.
 
 
-[Unreleased]: https://github.com/Helsinki-NLP/OpusFilter/compare/2.1.0...develop
+[Unreleased]: https://github.com/Helsinki-NLP/OpusFilter/compare/2.1.2...develop
+[2.1.2]: https://github.com/Helsinki-NLP/OpusFilter/compare/2.1.1...2.1.2
+[2.1.1]: https://github.com/Helsinki-NLP/OpusFilter/compare/2.1.0...2.1.1
 [2.1.0]: https://github.com/Helsinki-NLP/OpusFilter/compare/2.0.0...2.1.0
 [2.0.0]: https://github.com/Helsinki-NLP/OpusFilter/compare/1.0.1...2.0.0
 [1.0.1]: https://github.com/Helsinki-NLP/OpusFilter/compare/1.0.0...1.0.1
