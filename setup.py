@@ -10,7 +10,6 @@ install_requires = [
     "graphviz",
     "langid",
     "matplotlib",
-    "fast-mosestokenizer",
     "pandas>=1.0.0",
     "pycld2",
     "pyhash",
